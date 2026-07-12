@@ -72,17 +72,12 @@ class BlobStore:
     # Internals
     # ------------------------------------------------------------------ #
     def _path_for(self, digest: str) -> Path:
-        # Shard once we cross ~256 files in a flat dir; cheap heuristic.
-        if self._should_shard():
-            return self.blob_dir / digest[:2] / digest
-        return self.blob_dir / digest
-
-    def _should_shard(self) -> bool:
-        try:
-            count = len(os.listdir(self.blob_dir))
-        except FileNotFoundError:  # pragma: no cover - race with cleanup
-            return False
-        return count > 256
+        # Always shard by the first two hex characters. The decision must
+        # be STABLE across writes and reads — a dynamic "shard once we
+        # cross N files" rule would cause reads to fail for blobs written
+        # before the threshold (they'd be in the flat path but the read
+        # would look in the sharded path).
+        return self.blob_dir / digest[:2] / digest
 
     def __len__(self) -> int:
         if not self.blob_dir.exists():

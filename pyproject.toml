@@ -52,6 +52,10 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.5",
 ]
+docs = [
+    "mkdocs-material>=9.0",
+    "mkdocstrings[python]>=0.25",
+]
 
 [project.scripts]
 agentreplay = "agentreplay.cli:cli"

@@ -1,0 +1,82 @@
+# Build the package, verify the wheel + sdist are importable, and
+# (on tag) publish to PyPI.
+#
+# Trigger a publish by pushing a tag like `v0.1.0`:
+#
+#   git tag v0.1.0
+#   git push origin v0.1.0
+#
+# The workflow uses Trusted Publishing (OIDC) — no API token needed.
+# Configure the trusted publisher on PyPI once:
+#   https://docs.pypi.org/trusted-publishers/
+
+name: build-and-publish
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build sdist + wheel
+        run: python -m build
+
+      - name: Verify dist contents
+        run: |
+          twine check dist/*
+          echo "---"
+          ls -la dist/
+
+      - name: Smoke-test the wheel
+        run: |
+          python -m venv /tmp/wheel-test
+          /tmp/wheel-test/bin/pip install dist/*.whl
+          /tmp/wheel-test/bin/agentreplay --version
+          /tmp/wheel-test/bin/python -c "import agentreplay; print(agentreplay.__version__)"
+
+      - name: Upload dist artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    # Only publish on tag pushes (v*). Uses PyPI Trusted Publishing.
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # required for Trusted Publishing
+    steps:
+      - name: Download dist artefacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Remove --skip-existing once you've confirmed the first publish works.
+          skip-existing: true

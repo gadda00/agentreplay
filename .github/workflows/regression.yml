@@ -1,17 +1,17 @@
-# Regression tests for the AgentReplay cassette corpus.
+# Regression tests + overhead benchmark + reproduction-fidelity validation.
 #
-# This workflow replays every cassette under `cassettes/` in pure-replay
-# mode against the agent entry point declared in `tests/regression.py`.
-# Because pure replay makes zero model calls, this CI job costs no
-# inference spend to run on every PR — see §5.7 of the product proposal.
+# This workflow runs three CI jobs on every PR and push to main:
 #
-# To add a new regression test:
-#   1. Record a cassette with `agentreplay record cassettes/<name> -- python my_agent.py`
-#   2. Commit the cassette directory to the repo (or upload to your
-#      hosted cassette store if you outgrow Git).
-#   3. This workflow picks it up automatically on the next PR.
+#   1. Unit tests (pytest)
+#   2. Cassette regression (pure replay, zero model calls — §5.7)
+#   3. Overhead benchmark (verify ≤5% target — §7.2)
+#   4. Reproduction-fidelity validation on synthetic tasks (§7.1)
+#
+# All three CI jobs run without any API key — pure replay and the
+# synthetic task set are designed to exercise the full code path
+# without external dependencies.
 
-name: agentreplay-regression
+name: ci
 
 on:
   pull_request:
@@ -21,33 +21,79 @@ on:
   workflow_dispatch:
 
 jobs:
-  replay:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e .[dev]
+      - run: pytest -q
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install package + dev extras
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .[dev]
-
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e .[dev]
       - name: Replay cassette corpus
         env:
-          # Pure-replay mode never calls the model, so no API key needed.
           AGENTREPLAY_MODE: replay
         run: |
           agentreplay ci cassettes/ \
-            --agent-entry my_project.tests:run_agent \
+            --agent-entry agentreplay.regression:run_agent \
             --json > regression-report.json
-
-      - name: Upload regression report
+          cat regression-report.json
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
           name: regression-report
           path: regression-report.json
+
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e .[dev]
+      - name: Overhead benchmark (§7.2 target: ≤5%)
+        run: |
+          agentreplay benchmark-overhead \
+            --iterations 100 \
+            --report benchmark-report.json \
+            --json
+          cat benchmark-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-report
+          path: benchmark-report.json
+
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e .[dev]
+      - name: Reproduction-fidelity validation (§7.1 target: 100%)
+        run: |
+          agentreplay validate-swebench \
+            --tasks synthetic \
+            --limit 3 \
+            --report swebench-report.json
+          cat swebench-report.json
+      - name: GAIA validation
+        run: |
+          agentreplay validate-gaia \
+            --tasks synthetic \
+            --limit 3 \
+            --report gaia-report.json
+          cat gaia-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-reports
+          path: "*-report.json"

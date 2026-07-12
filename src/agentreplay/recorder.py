@@ -45,7 +45,12 @@ class Recorder:
 
     def __init__(self, cassette: Cassette, *, step_id_provider: Optional[Callable[[], str]] = None) -> None:
         self.cassette = cassette
-        self._step_id_provider = step_id_provider or _DefaultStepCounter()
+        # Always use a StepContext so enter_step can mutate the shared
+        # state that all interceptors reference. If a custom provider
+        # is passed, we still create a StepContext but it won't be used
+        # unless someone calls enter_step.
+        self._step_context = StepContext()
+        self._step_id_provider: Callable[[], str] = step_id_provider or self._step_context
         self._closed = False
         self._start_time = time.time()
 
@@ -101,7 +106,7 @@ class Recorder:
             self.cassette,
             mode=Mode.RECORD,
             call_type="openai",
-            step_id_provider=self._step_id_provider,
+            step_id_provider=self._step_context,
             **kwargs,
         )
 
@@ -111,7 +116,7 @@ class Recorder:
             self.cassette,
             mode=Mode.RECORD,
             call_type="anthropic",
-            step_id_provider=self._step_id_provider,
+            step_id_provider=self._step_context,
             **kwargs,
         )
 
@@ -121,7 +126,7 @@ class Recorder:
             self.cassette,
             mode=Mode.RECORD,
             call_type="custom",
-            step_id_provider=self._step_id_provider,
+            step_id_provider=self._step_context,
             **kwargs,
         )
 
@@ -130,7 +135,7 @@ class Recorder:
             client,
             self.cassette,
             mode=Mode.RECORD,
-            step_id_provider=self._step_id_provider,
+            step_id_provider=self._step_context,
             dialect=dialect,
         )
 
@@ -140,14 +145,14 @@ class Recorder:
             name,
             self.cassette,
             mode=Mode.RECORD,
-            step_id_provider=self._step_id_provider,
+            step_id_provider=self._step_context,
         )
 
     @property
     def clock(self) -> RecordingClock:
         if not hasattr(self, "_clock"):
             self._clock = RecordingClock(
-                self.cassette, mode=Mode.RECORD, step_id_provider=self._step_id_provider
+                self.cassette, mode=Mode.RECORD, step_id_provider=self._step_context
             )
         return self._clock
 
@@ -155,7 +160,7 @@ class Recorder:
     def random(self) -> RecordingRandom:
         if not hasattr(self, "_rng"):
             self._rng = RecordingRandom(
-                self.cassette, mode=Mode.RECORD, step_id_provider=self._step_id_provider
+                self.cassette, mode=Mode.RECORD, step_id_provider=self._step_context
             )
         return self._rng
 
@@ -168,14 +173,15 @@ class Recorder:
         Optional but recommended: lets the call-site IDs incorporate the
         framework's own notion of a step (LangGraph node name, CrewAI
         task ID, ...) instead of a monotonic counter.
+
+        This mutates the shared :class:`StepContext` that all
+        interceptors reference, so the new step ID takes effect
+        immediately for every interceptor created via ``wrap_*``.
         """
-        if isinstance(self._step_id_provider, _DefaultStepCounter):
-            self._step_id_provider = _StaticStepProvider(step_id)
-        elif isinstance(self._step_id_provider, _StaticStepProvider):
-            self._step_id_provider = _StaticStepProvider(step_id)
-        else:
-            # Custom provider — call it and ignore.
-            pass
+        self._step_context.set_static(step_id)
+        # Also update the step_id_provider in case it was a custom one —
+        # the StepContext is always the source of truth.
+        self._step_id_provider = self._step_context
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -207,20 +213,55 @@ class Recorder:
 # ---------------------------------------------------------------------- #
 # Step-ID providers
 # ---------------------------------------------------------------------- #
-class _DefaultStepCounter:
-    """Monotonic counter — used when no framework adapter is plugged in."""
+class StepContext:
+    """Mutable shared step-ID state.
+
+    All interceptors hold a reference to the SAME ``StepContext``
+    instance, so when ``enter_step`` updates the current step, every
+    interceptor immediately sees the new value. This is critical for
+    framework adapters like LangGraph's ``bind_graph`` which call
+    ``enter_step`` from a node wrapper while the LLM interceptor is
+    making calls inside the node.
+
+    The context has two modes:
+
+      - **counter** mode (default): returns ``step:N`` with a monotonic
+        counter. Used when no framework adapter is plugged in.
+      - **static** mode: returns the step ID set by ``enter_step``.
+        Used when a framework adapter (LangGraph, CrewAI, ...) is
+        providing per-node step IDs.
+    """
 
     def __init__(self) -> None:
-        self._n = 0
+        self._counter = 0
+        self._static: Optional[str] = None
 
     def __call__(self) -> str:
-        s = f"step:{self._n}"
-        self._n += 1
+        if self._static is not None:
+            return self._static
+        s = f"step:{self._counter}"
+        self._counter += 1
         return s
+
+    def set_static(self, step_id: str) -> None:
+        """Pin the context to a fixed step ID (framework adapter mode)."""
+        self._static = step_id
+
+    def clear_static(self) -> None:
+        """Return to counter mode."""
+        self._static = None
+
+
+# Backwards-compatible aliases
+_DefaultStepCounter = StepContext
 
 
 class _StaticStepProvider:
-    """Always returns the same step ID — set by ``enter_step``."""
+    """Always returns the same step ID — set by ``enter_step``.
+
+    Kept for backwards compatibility with code that constructs its own
+    provider. New code should use ``StepContext`` instead.
+    """
 
     def __init__(self, step_id: str) -> None:
         self.step_id = step_id

@@ -1,0 +1,18 @@
+{
+  "agent_name": "sample",
+  "created_at": 1783864754.6437564,
+  "duration_ms": 0.9679794311523438,
+  "extra": {},
+  "framework": "raw",
+  "git_commit": "38e1d63a7c6a4681c78e551abd8902f51dad3b60",
+  "id": "cass-dd9376b01549",
+  "model": "stub",
+  "num_events": 3,
+  "outcome": "pass",
+  "schema_version": "1.0.0",
+  "tags": [
+    "sample",
+    "regression"
+  ],
+  "task_id": ""
+}

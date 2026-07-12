@@ -37,9 +37,13 @@ coverage.xml
 .ruff_cache/
 
 # Project-specific: cassettes are large; keep small examples in repo
+# Cassette blobs (large payloads) are ignored by default, but committed
+# cassettes under `cassettes/sample-*/` are tracked for CI regression.
 cassettes/*.bin
-cassettes/*/blobs/*
+cassettes/tmp-*/
+cassettes/run-*/
 !cassettes/.gitkeep
+!cassettes/sample-001/**
 !tests/cassettes/**
 
 # OS

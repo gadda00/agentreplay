@@ -362,6 +362,40 @@ def record(
 
 
 # ---------------------------------------------------------------------- #
+# benchmark-overhead
+# ---------------------------------------------------------------------- #
+@cli.command(name="benchmark-overhead")
+@click.option("--iterations", type=int, default=200,
+              help="Number of LLM calls per measurement (default: 200).")
+@click.option("--repeats", type=int, default=3,
+              help="Number of repeats per measurement (median taken).")
+@click.option("--report", type=click.Path(dir_okay=False), default=None,
+              help="Write JSON report to this path.")
+@click.option("--json/--text", "as_json", default=False)
+def benchmark_overhead(iterations: int, repeats: int, report: Optional[str], as_json: bool) -> None:
+    """Measure recording-layer latency overhead vs. baseline (§7.2).
+
+    Reports percentage overhead vs. an uninstrumented baseline, plus
+    synthetic baselines matching the published 2026 figures for
+    LangSmith (~0%), Laminar (~5%), AgentOps (~12%), Langfuse (~15%).
+
+    Exits 0 if AgentReplay's overhead is ≤ 5% (the §7.2 target), 1 otherwise.
+    """
+    from agentreplay.benchmark.overhead import run_benchmark
+
+    rep = run_benchmark(iterations=iterations, repeats=repeats)
+    if as_json:
+        click.echo(json.dumps(rep.to_dict(), indent=2))
+    else:
+        click.echo(rep.render())
+    if report:
+        Path(report).write_text(json.dumps(rep.to_dict(), indent=2))
+        click.echo(f"\nReport written to {report}", err=True)
+    ar = next((r for r in rep.results if r.name == "AgentReplay (record)"), None)
+    sys.exit(0 if ar is not None and ar.overhead_pct <= 5.0 else 1)
+
+
+# ---------------------------------------------------------------------- #
 # Helpers
 # ---------------------------------------------------------------------- #
 def _import_dotted(path: str) -> Any:
@@ -389,3 +423,8 @@ def _safe(value: Any) -> Any:
 
 if __name__ == "__main__":  # pragma: no cover
     cli()
+
+
+# Register validation subcommands (validate-swebench, validate-gaia).
+# Imported at module bottom to avoid circular imports.
+from agentreplay.validation import cli as _validation_cli  # noqa: E402, F401

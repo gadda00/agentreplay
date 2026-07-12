@@ -37,7 +37,6 @@ from agentreplay.types import (
     ResponsePayload,
     StepID,
 )
-
 __all__ = [
     # Cassette + storage
     "Cassette",

@@ -51,7 +51,11 @@ class Replayer:
         self.mode = mode
         self.live_client = live_client
         self.live_http = live_http
-        self._step_id_provider = step_id_provider or _ReplayStepProvider()
+        # Mirror the Recorder's StepContext design so enter_step mutates
+        # shared state that all interceptors reference.
+        from agentreplay.recorder import StepContext
+        self._step_context = StepContext()
+        self._step_id_provider: Callable[[], str] = step_id_provider or self._step_context
         self._divergences: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------------ #
@@ -80,7 +84,7 @@ class Replayer:
             self.cassette,
             mode=self.mode,
             call_type="openai",
-            step_id_provider=self._step_id_provider,
+            step_id_provider=self._step_context,
             **kwargs,
         )
 
@@ -90,7 +94,7 @@ class Replayer:
             self.cassette,
             mode=self.mode,
             call_type="anthropic",
-            step_id_provider=self._step_id_provider,
+            step_id_provider=self._step_context,
             **kwargs,
         )
 
@@ -100,7 +104,7 @@ class Replayer:
             self.cassette,
             mode=self.mode,
             call_type="custom",
-            step_id_provider=self._step_id_provider,
+            step_id_provider=self._step_context,
             **kwargs,
         )
 
@@ -109,7 +113,7 @@ class Replayer:
             client or self.live_http,
             self.cassette,
             mode=self.mode,
-            step_id_provider=self._step_id_provider,
+            step_id_provider=self._step_context,
             dialect=dialect,
         )
 
@@ -119,14 +123,14 @@ class Replayer:
             name,
             self.cassette,
             mode=self.mode,
-            step_id_provider=self._step_id_provider,
+            step_id_provider=self._step_context,
         )
 
     @property
     def clock(self) -> RecordingClock:
         if not hasattr(self, "_clock"):
             self._clock = RecordingClock(
-                self.cassette, mode=self.mode, step_id_provider=self._step_id_provider
+                self.cassette, mode=self.mode, step_id_provider=self._step_context
             )
         return self._clock
 
@@ -134,7 +138,7 @@ class Replayer:
     def random(self) -> RecordingRandom:
         if not hasattr(self, "_rng"):
             self._rng = RecordingRandom(
-                self.cassette, mode=self.mode, step_id_provider=self._step_id_provider
+                self.cassette, mode=self.mode, step_id_provider=self._step_context
             )
         return self._rng
 
@@ -142,10 +146,14 @@ class Replayer:
     # Step management + divergence tracking
     # ------------------------------------------------------------------ #
     def enter_step(self, step_id: str) -> None:
-        if isinstance(self._step_id_provider, _ReplayStepProvider):
-            self._step_id_provider = _StaticStepProvider(step_id)
-        elif isinstance(self._step_id_provider, _StaticStepProvider):
-            self._step_id_provider = _StaticStepProvider(step_id)
+        """Pin the replayer's step context to a fixed step ID.
+
+        Mirrors :meth:`agentreplay.Recorder.enter_step` so the same
+        agent code (calling ``enter_step`` before each node) works in
+        both RECORD and REPLAY mode.
+        """
+        self._step_context.set_static(step_id)
+        self._step_id_provider = self._step_context
 
     def record_divergence(self, info: Dict[str, Any]) -> None:
         self._divergences.append(info)
