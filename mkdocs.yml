@@ -83,7 +83,7 @@ markdown_extensions:
   - pymdownx.tabbed:
       alternate_style: true
   - admonition
-  - pymdownx.admonition
+  - pymdownx.details
   - attr_list
   - md_in_html
   - toc:

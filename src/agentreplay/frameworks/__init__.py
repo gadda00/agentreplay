@@ -9,12 +9,14 @@ Supported frameworks:
     * :mod:`agentreplay.frameworks.openai_sdk`     — OpenAI Agents SDK / raw OpenAI client
     * :mod:`agentreplay.frameworks.anthropic_sdk`  — Anthropic SDK / Anthropic Agents SDK
     * :mod:`agentreplay.frameworks.langgraph`      — LangGraph (first-class target)
+    * :mod:`agentreplay.frameworks.crewai`         — CrewAI
+    * :mod:`agentreplay.frameworks.autogen`        — AutoGen (v0.2 and v0.4+)
     * :mod:`agentreplay.frameworks.raw`            — custom / framework-less agents
 
 The adapters are intentionally *lazy*: importing ``agentreplay.frameworks``
-does NOT import OpenAI / Anthropic / LangGraph. Each adapter only imports
-its framework when called, so teams that do not use a framework pay no
-import cost for it.
+does NOT import OpenAI / Anthropic / LangGraph / CrewAI / AutoGen. Each
+adapter only imports its framework when called, so teams that do not use
+a framework pay no import cost for it.
 """
 from agentreplay.frameworks.raw import wrap_raw_client
 
@@ -29,6 +31,15 @@ def __getattr__(name: str):  # pragma: no cover - lazy module loader
     if name == "wrap_langgraph":
         from agentreplay.frameworks.langgraph import wrap_langgraph
         return wrap_langgraph
+    if name == "wrap_crewai_llm":
+        from agentreplay.frameworks.crewai import wrap_crewai_llm
+        return wrap_crewai_llm
+    if name == "wrap_autogen_client":
+        from agentreplay.frameworks.autogen import wrap_autogen_client
+        return wrap_autogen_client
+    if name == "wrap_autogen_v4_agent":
+        from agentreplay.frameworks.autogen import wrap_autogen_v4_agent
+        return wrap_autogen_v4_agent
     raise AttributeError(name)
 
 

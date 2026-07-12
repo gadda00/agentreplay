@@ -90,6 +90,9 @@ pip install agentreplay                 # core only
 pip install agentreplay[openai]         # + OpenAI SDK adapter
 pip install agentreplay[anthropic]      # + Anthropic SDK adapter
 pip install agentreplay[langgraph]      # + LangGraph adapter
+pip install agentreplay[crewai]         # + CrewAI adapter
+pip install agentreplay[autogen]        # + AutoGen adapter (v0.2 and v0.4+)
+pip install agentreplay[datasets]       # + real SWE-bench/GAIA validation loaders
 pip install agentreplay[all]            # everything
 pip install agentreplay[dev]            # + pytest, ruff, mypy
 ```
@@ -207,7 +210,7 @@ On top of these:
 | **`diff`** | Structural diff between cassettes — highlights *which fields* diverged, not just *that* they diverged. |
 | **`ci`** | Regression runner — discovers cassettes in a directory, replays each through an agent entry point, returns a structured report. |
 | **`cli`** | The `agentreplay` command-line tool. |
-| **`frameworks`** | Adapters for OpenAI SDK, Anthropic SDK, LangGraph, and raw agent loops. |
+| **`frameworks`** | Adapters for OpenAI SDK, Anthropic SDK, LangGraph, CrewAI, AutoGen (v0.2 + v0.4+), and raw agent loops. |
 
 ## How call-site IDs work
 
@@ -299,9 +302,35 @@ Honest scope limits, not flaws (§8 of the product proposal):
 
 - [`examples/raw_agent.py`](examples/raw_agent.py) — record/replay a framework-less agent loop
 - [`examples/counterfactual.py`](examples/counterfactual.py) — "what if the tool had returned an error?"
-- [`examples/langgraph_agent.py`](examples/langgraph_agent.py) — LangGraph-style node execution with per-node step IDs (stub)
+- [`examples/langgraph_agent.py`](examples/langgraph_agent.py) — LangGraph-style node execution with per-node step IDs
 - [`examples/langgraph_real.py`](examples/langgraph_real.py) — real LangGraph `StateGraph` with `bind_graph` integration
 - [`examples/openai_agent.py`](examples/openai_agent.py) — OpenAI SDK as a drop-in replacement
+
+### Async support
+
+AgentReplay supports async LLM clients (`AsyncOpenAI`, `AsyncAnthropic`,
+or any client with an `acomplete` coroutine). Use `client.acomplete(...)`
+in RECORD mode to await the real client, and in REPLAY mode to get the
+recorded value back without any live call:
+
+```python
+from openai import AsyncOpenAI
+from agentreplay import Recorder, Replayer, Mode
+
+# Record
+async with Recorder.create("cassettes/run-001") as rec:
+    client = rec.wrap_openai(AsyncOpenAI())
+    r = await client.acomplete(messages=[...], model="gpt-4o")
+
+# Replay (zero model calls)
+async with Replayer.open("cassettes/run-001", mode=Mode.REPLAY) as rep:
+    client = rep.wrap_openai(AsyncOpenAI())  # never called
+    r = await client.acomplete(messages=[...], model="gpt-4o")
+```
+
+If the wrapped client has no `acomplete` method, `RecordingClient.acomplete`
+falls back to running the sync `complete` in a thread via
+`asyncio.to_thread`.
 
 ## Roadmap (12-week build, §6 of the proposal)
 

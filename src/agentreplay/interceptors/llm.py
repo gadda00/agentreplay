@@ -159,6 +159,72 @@ class RecordingClient:
         raise ValueError(f"unknown call_type {self.call_type!r}")
 
     # ------------------------------------------------------------------ #
+    # Async support — for AsyncOpenAI / AsyncAnthropic clients.
+    # ------------------------------------------------------------------ #
+    async def acomplete(
+        self,
+        *,
+        messages: Any,
+        tools: Any = None,
+        step_id: Optional[str] = None,
+        **params: Any,
+    ) -> Any:
+        """Async version of :meth:`complete`.
+
+        If the underlying real client supports async (``AsyncOpenAI``,
+        ``AsyncAnthropic``, or a custom async client with an
+        ``acomplete`` method), the call is awaited. Otherwise the
+        sync ``complete`` is called in a thread via ``asyncio.to_thread``.
+        """
+        import asyncio
+        import inspect
+
+        # REPLAY path — same as sync, just return the recorded value.
+        sid = step_id or f"{self._step_id_provider()}:{self._call_counter}"
+        # Note: we do NOT increment _call_counter here if we end up
+        # delegating to sync complete (which increments it). To keep
+        # call IDs stable, we let sync complete handle the counter.
+        if self.mode in (Mode.REPLAY, Mode.HYBRID):
+            return self.complete(messages=messages, tools=tools, step_id=step_id, **params)
+
+        # LIVE / RECORD path — try to invoke the real client's async path.
+        real_acomplete = getattr(self.real_client, "acomplete", None)
+        if real_acomplete is not None and inspect.iscoroutinefunction(real_acomplete):
+            started = time.time()
+            response = await real_acomplete(messages=messages, tools=tools, **params)
+            duration_ms = (time.time() - started) * 1000.0
+        else:
+            # Fall back to sync in a thread.
+            response = await asyncio.to_thread(
+                self._invoke_real, messages=messages, tools=tools, **params
+            )
+            started = time.time()
+            duration_ms = (time.time() - started) * 1000.0
+
+        if self.mode == Mode.RECORD:
+            sid_actual = step_id or f"{self._step_id_provider()}:{self._call_counter}"
+            self._call_counter += 1
+            request = {"messages": messages, "tools": tools, **params}
+            call_id = hash_call_site(
+                sid_actual,
+                request,
+                call_type=CallType.LLM.value,
+                agent_id=self.agent_id,
+                thread_id=self.thread_id,
+            )
+            self.cassette.write_event(
+                step_id=sid_actual,
+                call_type=CallType.LLM,
+                call_id=call_id,
+                request=request,
+                response=response,
+                started_at=started,
+                duration_ms=duration_ms,
+                metadata={"call_type": self.call_type, "model": params.get("model", ""), "async": True},
+            )
+        return response
+
+    # ------------------------------------------------------------------ #
     # SDK-specific convenience methods so the wrapper can be used as a
     # drop-in replacement for the raw client object.
     # ------------------------------------------------------------------ #

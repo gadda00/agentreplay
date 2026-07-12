@@ -129,7 +129,7 @@ def load_synthetic_tasks(num_tasks: int = 5, *, limit: Optional[int] = None) -> 
 
 
 # ---------------------------------------------------------------------- #
-# Real task set loaders (stubs — require external deps to implement)
+# Real task set loaders
 # ---------------------------------------------------------------------- #
 class SwebenchVerifiedTaskSet(TaskSet):
     """Loader for the real SWE-bench Verified task set.
@@ -138,23 +138,14 @@ class SwebenchVerifiedTaskSet(TaskSet):
     resolution tasks, frozen at specific Docker repository states. To
     use this loader you need:
 
-      1. The SWE-bench Verified dataset. The canonical source is the
-         HuggingFace dataset ``princeton-nlp/SWE-bench_Verified``; load
-         it with::
-
-             from datasets import load_dataset
-             ds = load_dataset("princeton-nlp/SWE-bench_Verified", split="test")
-
+      1. The ``datasets`` package: ``pip install datasets``
       2. A real LLM client (OpenAI / Anthropic) to record the initial
          cassettes. Set ``OPENAI_API_KEY`` (or ``ANTHROPIC_API_KEY``).
-
       3. Docker (optional, recommended) for sandboxed tool execution —
          see §8 of the product proposal.
 
-    This loader is a *stub*: the :meth:`load` method raises
-    :class:`NotImplementedError` with a pointer to the setup steps.
-    Implement it by converting each SWE-bench task dict into a
-    :class:`Task` object.
+    The dataset is downloaded from HuggingFace on first use and cached
+    locally by the ``datasets`` library.
     """
 
     DATASET_NAME = "princeton-nlp/SWE-bench_Verified"
@@ -164,15 +155,48 @@ class SwebenchVerifiedTaskSet(TaskSet):
         self.dataset_dir = dataset_dir
 
     def load(self, *, limit: Optional[int] = None) -> List[Task]:
-        raise NotImplementedError(
-            "SwebenchVerifiedTaskSet.load requires the `datasets` package "
-            "and a downloaded copy of the SWE-bench Verified corpus. "
-            "Install with `pip install datasets`, then implement this "
-            "method to convert each task dict from "
-            f"load_dataset({self.DATASET_NAME!r}, split='test') into a "
-            "agentreplay.validation.tasks.Task object. See the class "
-            "docstring for details."
-        )
+        try:
+            from datasets import load_dataset
+        except ImportError as exc:
+            raise NotImplementedError(
+                "SwebenchVerifiedTaskSet.load requires the `datasets` package. "
+                "Install with `pip install datasets` and retry."
+            ) from exc
+
+        ds = load_dataset(self.DATASET_NAME, split="test")
+        tasks: list[Task] = []
+        for i, row in enumerate(ds):
+            if limit is not None and i >= limit:
+                break
+            # SWE-bench Verified rows have: repo, instance_id, base_commit,
+            # patch, test_patch, problem_statement, hints_text,
+            # FAIL_TO_PASS, PASS_TO_PASS, environment_setup_commit
+            instance_id = row.get("instance_id", f"swe-bench:{i}")
+            problem = row.get("problem_statement", "")
+            repo = row.get("repo", "unknown")
+            tasks.append(
+                Task(
+                    id=f"swe-bench:{instance_id}",
+                    description=f"SWE-bench Verified task {instance_id} ({repo})",
+                    messages=[
+                        {"role": "user", "content": problem}
+                    ],
+                    expected={
+                        "patch": row.get("patch", ""),
+                        "fail_to_pass": row.get("FAIL_TO_PASS", "[]"),
+                        "pass_to_pass": row.get("PASS_TO_PASS", "[]"),
+                    },
+                    tools={},  # SWE-bench agents bring their own tools
+                    metadata={
+                        "repo": repo,
+                        "base_commit": row.get("base_commit", ""),
+                        "test_patch": row.get("test_patch", ""),
+                        "environment_setup_commit": row.get("environment_setup_commit", ""),
+                        "hints_text": row.get("hints_text", ""),
+                    },
+                )
+            )
+        return tasks
 
 
 class GaiaTaskSet(TaskSet):
@@ -181,18 +205,17 @@ class GaiaTaskSet(TaskSet):
     GAIA is a public benchmark of 466 real-world multi-step assistant
     tasks. To use this loader you need:
 
-      1. The GAIA dataset. The canonical source is the HuggingFace
-         dataset ``gaia-benchmark/GAIA``; load it with::
-
-             from datasets import load_dataset
-             ds = load_dataset("gaia-benchmark/GAIA", "2023_all", split="validation")
-
+      1. The ``datasets`` package: ``pip install datasets``
       2. A real LLM client with web/search tool access (GAIA tasks
          involve live web lookups — this is the harder, more realistic
          test of the recording layer per §6 of the product proposal).
+      3. Note: the GAIA dataset requires accepting the dataset license
+         on HuggingFace. Visit
+         https://huggingface.co/datasets/gaia-benchmark/GAIA and accept
+         the terms before first use.
 
-    This loader is a *stub* for the same reason as
-    :class:`SwebenchVerifiedTaskSet`.
+    The dataset is downloaded from HuggingFace on first use and cached
+    locally by the ``datasets`` library.
     """
 
     DATASET_NAME = "gaia-benchmark/GAIA"
@@ -202,15 +225,47 @@ class GaiaTaskSet(TaskSet):
         self.dataset_dir = dataset_dir
 
     def load(self, *, limit: Optional[int] = None) -> List[Task]:
-        raise NotImplementedError(
-            "GaiaTaskSet.load requires the `datasets` package and a "
-            "downloaded copy of the GAIA corpus. Install with "
-            "`pip install datasets`, then implement this method to "
-            "convert each task dict from "
-            f"load_dataset({self.DATASET_NAME!r}, '2023_all', split='validation') "
-            "into a agentreplay.validation.tasks.Task object. See the "
-            "class docstring for details."
-        )
+        try:
+            from datasets import load_dataset
+        except ImportError as exc:
+            raise NotImplementedError(
+                "GaiaTaskSet.load requires the `datasets` package. "
+                "Install with `pip install datasets` and retry."
+            ) from exc
+
+        ds = load_dataset(self.DATASET_NAME, "2023_all", split="validation")
+        tasks: list[Task] = []
+        for i, row in enumerate(ds):
+            if limit is not None and i >= limit:
+                break
+            # GAIA rows have: task_id, Question, Level, Final Answer,
+            # file_name, file_path, Annotator Metadata
+            task_id = row.get("task_id", f"gaia:{i}")
+            question = row.get("Question", "")
+            level = row.get("Level", 1)
+            final_answer = row.get("Final Answer", "")
+            tasks.append(
+                Task(
+                    id=f"gaia:{task_id}",
+                    description=f"GAIA Level {level} task: {question[:100]}",
+                    messages=[
+                        {"role": "user", "content": question}
+                    ],
+                    expected={
+                        "final_answer": final_answer,
+                        "level": level,
+                    },
+                    tools={},  # GAIA agents bring their own web/search tools
+                    metadata={
+                        "task_id": task_id,
+                        "level": level,
+                        "file_name": row.get("file_name", ""),
+                        "file_path": row.get("file_path", ""),
+                        "annotator_metadata": row.get("Annotator Metadata", ""),
+                    },
+                )
+            )
+        return tasks
 
 
 # ---------------------------------------------------------------------- #

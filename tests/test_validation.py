@@ -44,20 +44,36 @@ def test_load_synthetic_tasks_helper():
     assert len(tasks) == 4
 
 
-def test_swebench_verified_task_set_raises_helpful_error():
+def test_swebench_verified_task_set_raises_without_datasets():
+    """Without the `datasets` package installed, the loader must raise
+    NotImplementedError with a helpful message pointing to `pip install datasets`."""
     ts = SwebenchVerifiedTaskSet()
+    try:
+        import datasets  # noqa: F401
+        has_datasets = True
+    except ImportError:
+        has_datasets = False
+    if has_datasets:
+        pytest.skip("datasets package installed; cannot test ImportError path")
     with pytest.raises(NotImplementedError) as ei:
         ts.load()
     assert "datasets" in str(ei.value)
-    assert "SWE-bench_Verified" in str(ei.value)
 
 
-def test_gaia_task_set_raises_helpful_error():
+def test_gaia_task_set_raises_without_datasets():
+    """Without the `datasets` package installed, the loader must raise
+    NotImplementedError with a helpful message."""
     ts = GaiaTaskSet()
+    try:
+        import datasets  # noqa: F401
+        has_datasets = True
+    except ImportError:
+        has_datasets = False
+    if has_datasets:
+        pytest.skip("datasets package installed; cannot test ImportError path")
     with pytest.raises(NotImplementedError) as ei:
         ts.load()
     assert "datasets" in str(ei.value)
-    assert "GAIA" in str(ei.value)
 
 
 def test_get_task_set_known_names():

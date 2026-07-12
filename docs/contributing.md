@@ -2,7 +2,7 @@
 
 Thanks for your interest in improving AgentReplay! This document covers
 the basics. For architecture details, see
-[docs/architecture.md](docs/architecture.md).
+[architecture.md](architecture.md).
 
 ## Development setup
 

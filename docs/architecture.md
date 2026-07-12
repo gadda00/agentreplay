@@ -1,7 +1,7 @@
 # Architecture
 
 This document describes the internal architecture of AgentReplay for
-contributors. For usage, see the [README](../README.md).
+contributors. For usage, see the [README](https://github.com/gadda00/agentreplay#readme).
 
 ## Design principle
 
@@ -226,3 +226,24 @@ The end-to-end tests are the load-bearing ones: they verify the *core
 product guarantee* — a pure replay reproduces the original recording
 bit-exact, with zero model calls. Every new interceptor behavior must
 add a corresponding test of this shape.
+
+## Risks and limitations
+
+Honest scope limits, not flaws (§8 of the product proposal):
+
+- **Uninstrumented side channels.** If the target agent reads entropy or
+  state through a path the interceptors do not cover (a library that hits
+  the network directly, a side-effecting tool that writes to a live
+  external system), pure replay will not be bit-exact. Mitigation: pair
+  AgentReplay with Docker-level sandboxing for tool execution, and treat
+  "verified fully intercepted" as an explicit, testable property of a
+  cassette.
+
+- **Storage growth.** Verbatim capture of every call can grow quickly.
+  Mitigation: content-addressed deduplication removes most of the
+  redundancy; a retention policy (keep failing cassettes indefinitely,
+  sample passing cassettes) bounds growth further.
+
+- **AgentReplay does not, by itself, make an agent more reliable.** It
+  makes failures reproducible and cheap to study, which is a
+  prerequisite for fixing reliability rather than a fix in itself.

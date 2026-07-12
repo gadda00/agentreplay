@@ -58,7 +58,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -e .[dev]
-      - name: Overhead benchmark (§7.2 target: ≤5%)
+      - name: Overhead benchmark (target ≤5%)
         run: |
           agentreplay benchmark-overhead \
             --iterations 100 \
@@ -78,7 +78,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -e .[dev]
-      - name: Reproduction-fidelity validation (§7.1 target: 100%)
+      - name: Reproduction-fidelity validation (target 100%)
         run: |
           agentreplay validate-swebench \
             --tasks synthetic \
