@@ -28,6 +28,10 @@ class RecordingStream:
     The ``on_complete`` callback is called with the list of captured
     chunks when the stream is exhausted, so the RecordingClient can
     write them to the cassette as a single event.
+
+    The callback is called via ``try/finally`` so it fires even if the
+    consumer breaks out of the iteration early or an exception is raised
+    — preventing silent data loss.
     """
 
     def __init__(
@@ -40,16 +44,43 @@ class RecordingStream:
         self._on_complete = on_complete
         self._chunks: List[Any] = []
         self._exhausted = False
+        self._callback_fired = False
 
     def __iter__(self) -> Iterator[Any]:
-        for chunk in self._real_stream:
-            # Try to make the chunk JSON-serialisable. OpenAI/Anthropic
-            # chunks are Pydantic models — convert to dict.
-            serializable = _serialize_chunk(chunk)
-            self._chunks.append(serializable)
-            yield chunk
-        self._exhausted = True
-        if self._on_complete is not None:
+        try:
+            for chunk in self._real_stream:
+                serializable = _serialize_chunk(chunk)
+                self._chunks.append(serializable)
+                yield chunk
+            self._exhausted = True
+        finally:
+            self._fire_callback()
+
+    def __aiter__(self):
+        """Async iteration support — delegates to the real stream's __aiter__."""
+        return self._async_iter()
+
+    async def _async_iter(self):
+        try:
+            if hasattr(self._real_stream, "__aiter__"):
+                async for chunk in self._real_stream:
+                    serializable = _serialize_chunk(chunk)
+                    self._chunks.append(serializable)
+                    yield chunk
+            else:
+                # Sync stream in async context — iterate synchronously
+                for chunk in self._real_stream:
+                    serializable = _serialize_chunk(chunk)
+                    self._chunks.append(serializable)
+                    yield chunk
+            self._exhausted = True
+        finally:
+            self._fire_callback()
+
+    def _fire_callback(self) -> None:
+        """Fire the on_complete callback exactly once, even on early exit."""
+        if not self._callback_fired and self._on_complete is not None:
+            self._callback_fired = True
             self._on_complete(self._chunks)
 
     @property
@@ -100,6 +131,14 @@ class ReplayStream:
         if self._rehydrate is not None:
             return self._rehydrate(chunk)
         return chunk
+
+    async def __aiter__(self):
+        """Async iteration support — yields chunks from the recorded list."""
+        for chunk in self._chunks:
+            if self._rehydrate is not None:
+                yield self._rehydrate(chunk)
+            else:
+                yield chunk
 
     def close(self) -> None:
         """No-op — compatibility with httpx/requests stream close()."""

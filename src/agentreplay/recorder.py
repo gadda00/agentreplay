@@ -255,18 +255,4 @@ class StepContext:
 
 
 # Backwards-compatible aliases
-_DefaultStepCounter = StepContext
-
-
-class _StaticStepProvider:
-    """Always returns the same step ID — set by ``enter_step``.
-
-    Kept for backwards compatibility with code that constructs its own
-    provider. New code should use ``StepContext`` instead.
-    """
-
-    def __init__(self, step_id: str) -> None:
-        self.step_id = step_id
-
-    def __call__(self) -> str:
-        return self.step_id
+_DefaultStepCounter = StepContext  # kept for backwards compat; use StepContext

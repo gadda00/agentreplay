@@ -197,7 +197,9 @@ def render_diff(diff: Diff, *, max_field_diffs: int = 8) -> str:
         lines.append("  ✓ bit-exact match")
         return "\n".join(lines)
     first = diff.first_divergence
-    assert first is not None
+    if first is None:
+        lines.append("  (no divergence details available)")
+        return "\n".join(lines)
     lines.append(f"  ✗ first divergence at step {first.seq} ({first.call_type}, step_id={first.step_id!r})")
     lines.append(f"    recorded call_id: {first.recorded_call_id}")
     lines.append(f"    actual   call_id: {first.actual_call_id}")

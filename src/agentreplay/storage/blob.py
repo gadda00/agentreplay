@@ -32,7 +32,13 @@ class BlobStore:
     def __init__(self, root: Union[str, os.PathLike]) -> None:
         self.root = Path(root)
         self.blob_dir = self.root / self.BLOB_DIR
-        self.blob_dir.mkdir(parents=True, exist_ok=True)
+        # Only create dirs if the root exists — readonly cassettes may be on
+        # a read-only filesystem where mkdir would fail.
+        if self.root.exists():
+            self.blob_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self.root.mkdir(parents=True, exist_ok=True)
+            self.blob_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ #

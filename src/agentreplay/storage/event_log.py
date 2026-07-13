@@ -84,9 +84,12 @@ class EventLog:
         self._by_seq[event.seq] = event
 
     def _ensure_index(self) -> None:
-        """Build the index if it hasn't been built yet."""
+        """Build the index if it hasn't been built yet. Thread-safe."""
         if self._index_dirty:
-            self._rebuild_index()
+            with self._lock:
+                # Double-check under lock — another thread may have built it
+                if self._index_dirty:
+                    self._rebuild_index()
 
     # ------------------------------------------------------------------ #
     # Write

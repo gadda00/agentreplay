@@ -207,6 +207,21 @@ def run_corpus(
             )
             if stop_on_first_failure:
                 return report
+        except Exception as exc:
+            # Catch non-AgentReplay exceptions (bugs in agent code, KeyError,
+            # etc.) so one broken cassette doesn't kill the entire corpus run.
+            duration_ms = (time.time() - started) * 1000.0
+            report.results.append(
+                RegressionResult(
+                    cassette_id=cassette.meta.id,
+                    cassette_path=str(cassette_path),
+                    passed=False,
+                    duration_ms=duration_ms,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            )
+            if stop_on_first_failure:
+                return report
     return report
 
 

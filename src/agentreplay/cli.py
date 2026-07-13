@@ -545,6 +545,11 @@ def clean(corpus_root: str, older_than: Optional[str], keep_outcome: Optional[st
 
         # Would remove
         removed += 1
+        # Safety: never delete the corpus root itself
+        if Path(path) == Path(corpus_root).resolve():
+            click.echo(f"  [SKIP] refusing to delete corpus root: {path}")
+            removed -= 1
+            continue
         if dry_run:
             click.echo(f"  [dry-run] would remove: {path} (id={c.meta.id}, outcome={c.meta.outcome})")
         else:

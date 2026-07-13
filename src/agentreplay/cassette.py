@@ -146,6 +146,17 @@ class Cassette:
         if not meta_path.exists():
             raise CassetteNotFoundError(f"no cassette at {root!s}")
         meta = CassetteMeta.from_dict(json.loads(meta_path.read_text(encoding="utf-8")))
+        # Schema version check — warn if cassette was written by a newer version
+        from agentreplay.constants import CASSETTE_VERSION
+        if meta.schema_version != CASSETTE_VERSION:
+            import warnings
+            warnings.warn(
+                f"Cassette {meta.id!r} was written with schema version "
+                f"{meta.schema_version!r}, but this library uses "
+                f"{CASSETTE_VERSION!r}. Replay may not be bit-exact.",
+                UserWarning,
+                stacklevel=2,
+            )
         return cls(root, meta, readonly=readonly)
 
     # ------------------------------------------------------------------ #
@@ -380,15 +391,25 @@ class Cassette:
 
         Extracts the archive to ``target_root`` and opens the resulting
         cassette directory.
+
+        Security: validates that all extracted paths stay within
+        ``target_root`` to prevent Zip Slip attacks.
         """
         import zipfile
 
         zip_path = Path(zip_path)
-        target_root = Path(target_root)
+        target_root = Path(target_root).resolve()
         if target_root.exists() and any(target_root.iterdir()):
             raise CassetteError(f"target root {target_root!s} is not empty")
         target_root.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(zip_path, "r") as zf:
+            for member in zf.namelist():
+                member_path = (target_root / member).resolve()
+                # Security: ensure the extracted path is within target_root
+                if not str(member_path).startswith(str(target_root)):
+                    raise CassetteError(
+                        f"Zip Slip detected: '{member}' would extract outside target root"
+                    )
             zf.extractall(target_root)
         return cls.open(target_root, readonly=readonly)
 

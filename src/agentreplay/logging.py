@@ -11,8 +11,15 @@ import os
 import sys
 
 
+# Track whether set_verbose() was called explicitly, so get_logger()
+# doesn't override it by re-reading env vars.
+_user_level_override: int | None = None
+
+
 def _get_level() -> int:
-    """Determine the log level from environment variables."""
+    """Determine the log level from environment or user override."""
+    if _user_level_override is not None:
+        return _user_level_override
     if os.environ.get("AGENTREPLAY_VERBOSE", "").lower() in ("1", "true", "yes"):
         return logging.DEBUG
     level_name = os.environ.get("AGENTREPLAY_LOG_LEVEL", "WARNING").upper()
@@ -44,6 +51,12 @@ def get_logger(name: str) -> logging.Logger:
 
 
 def set_verbose(verbose: bool) -> None:
-    """Enable or disable verbose (DEBUG) logging at runtime."""
+    """Enable or disable verbose (DEBUG) logging at runtime.
+
+    Once called, this overrides any env var setting. Pass False to
+    restore WARNING level.
+    """
+    global _user_level_override
+    _user_level_override = logging.DEBUG if verbose else logging.WARNING
     root = logging.getLogger("agentreplay")
-    root.setLevel(logging.DEBUG if verbose else logging.WARNING)
+    root.setLevel(_user_level_override)

@@ -173,24 +173,3 @@ class Replayer:
 
     def __repr__(self) -> str:
         return f"<Replayer cassette={self.cassette.meta.id!r} mode={self.mode!r} events={len(self.cassette.events)}>"
-
-
-class _ReplayStepProvider:
-    """Default step-ID provider for replay — mirrors the recorder's
-    monotonic counter so step IDs line up across record/replay runs."""
-
-    def __init__(self) -> None:
-        self._n = 0
-
-    def __call__(self) -> str:
-        s = f"step:{self._n}"
-        self._n += 1
-        return s
-
-
-class _StaticStepProvider:
-    def __init__(self, step_id: str) -> None:
-        self.step_id = step_id
-
-    def __call__(self) -> str:
-        return self.step_id

@@ -46,7 +46,7 @@ openai = ["openai>=1.0"]
 anthropic = ["anthropic>=0.18"]
 langgraph = ["langgraph>=0.2", "langchain-core>=0.3"]
 crewai = ["crewai>=0.4"]
-autogen = ["autogen>=0.2", "pyautogen>=0.2"]
+autogen = ["pyautogen>=0.2"]
 datasets = ["datasets>=2.0"]
 all = ["openai>=1.0", "anthropic>=0.18", "langgraph>=0.2", "langchain-core>=0.3", "crewai>=0.4", "pyautogen>=0.2", "datasets>=2.0"]
 dev = [

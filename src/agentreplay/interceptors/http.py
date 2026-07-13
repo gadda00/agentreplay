@@ -91,6 +91,10 @@ class RecordingTool(_BaseCallInterceptor):
         if self.mode in (Mode.REPLAY, Mode.HYBRID):
             cached = self._lookup_or_raise(sid, call_id, request, CallType.TOOL)
             if cached is not None:
+                # If the recorded response was an exception, re-raise it
+                # so the agent's control flow matches the recording.
+                if cached.get("error"):
+                    raise _reconstruct_exception(cached["error"])
                 return cached["value"]
             # HYBRID fallthrough:
             return self._invoke_and_record(sid, call_id, request, args, kwargs)
@@ -367,3 +371,21 @@ class _ReplayResponse:
 
     def __repr__(self) -> str:
         return f"<_ReplayResponse [{self.status_code}]>"
+
+
+def _reconstruct_exception(error_str: str) -> Exception:
+    """Reconstruct an exception from its stored string representation.
+
+    The error string is formatted as ``"ExceptionType: message"``.
+    We try to find the exception class in the builtins; if not found,
+    we fall back to a generic RuntimeError with the full string.
+    """
+    if ":" in error_str:
+        exc_type_name, _, message = error_str.partition(":")
+        message = message.strip()
+        # Try to find the exception class in builtins
+        import builtins
+        exc_class = getattr(builtins, exc_type_name, None)
+        if exc_class is not None and issubclass(exc_class, BaseException):
+            return exc_class(message)
+    return RuntimeError(error_str)

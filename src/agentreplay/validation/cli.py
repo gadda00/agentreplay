@@ -94,7 +94,7 @@ def validate_swebench(
     Exits 0 if fidelity = 100% (§7.1 target), 1 otherwise.
     """
     _run_validation_cmd(
-        tasks if tasks != "synthetic" else "synthetic",
+        tasks,
         limit=limit,
         cassette_root=cassette_root,
         report_path=report,

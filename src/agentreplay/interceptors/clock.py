@@ -49,6 +49,9 @@ class RecordingClock(_BaseInterceptor):
     during replay returns the n-th recorded timestamp, regardless of
     wall-clock time. This is what makes agent runs that read the clock
     inside their tools replay bit-exact.
+
+    Uses a per-interceptor counter (like RecordingRandom) to ensure
+    multiple clock reads in the same step get unique call-site IDs.
     """
 
     def __init__(self, cassette: Cassette, *, mode: Mode = Mode.RECORD,
@@ -56,23 +59,25 @@ class RecordingClock(_BaseInterceptor):
                  real_clock: Optional[Any] = None) -> None:
         super().__init__(cassette, mode=mode, step_id_provider=step_id_provider)
         self._real = real_clock or time
-        self._replay_iter = None  # lazy
+        self._counter = 0
+
+    def _next_step_id(self, op: str) -> str:
+        """Generate a unique step_id for this clock call, including a counter
+        to avoid duplicate call-site IDs when clock.time() is called multiple
+        times in the same step."""
+        sid = f"{self._step_id()}:clock:{op}:{self._counter}"
+        self._counter += 1
+        return sid
 
     def time(self) -> float:
-        step_id = f"{self._step_id()}:clock"
-        # The "request" is just the call sequence — encoded by step_id alone.
+        step_id = self._next_step_id("time")
         call_id = hash_call_site(step_id, {"op": "time"}, call_type=CallType.CLOCK.value)
         if self.mode in (Mode.REPLAY, Mode.HYBRID):
             event = self.cassette.lookup_call(call_id)
             if event is not None:
                 return float(self.cassette.resolve_response(event))
             if self.mode == Mode.REPLAY:
-                # No recorded value — synthesise a deterministic fallback
-                # rather than fail. This is rare: it means the agent asked
-                # the clock an unrecorded question (e.g. via a path we
-                # didn't wrap). Better to keep going than to crash.
                 return 0.0
-        # LIVE or RECORD
         t = self._real.time()
         if self.mode == Mode.RECORD:
             self.cassette.write_event(
@@ -87,8 +92,7 @@ class RecordingClock(_BaseInterceptor):
         return t
 
     def monotonic(self) -> float:
-        # monotonic has no epoch meaning; record and replay it the same way.
-        step_id = f"{self._step_id()}:clock"
+        step_id = self._next_step_id("monotonic")
         call_id = hash_call_site(step_id, {"op": "monotonic"}, call_type=CallType.CLOCK.value)
         if self.mode in (Mode.REPLAY, Mode.HYBRID):
             event = self.cassette.lookup_call(call_id)
@@ -110,7 +114,7 @@ class RecordingClock(_BaseInterceptor):
         return t
 
     def datetime_now(self, tz: Optional[Any] = None) -> datetime:
-        step_id = f"{self._step_id()}:clock"
+        step_id = self._next_step_id("datetime_now")
         call_id = hash_call_site(
             step_id, {"op": "datetime_now", "tz": str(tz)}, call_type=CallType.CLOCK.value
         )
@@ -183,8 +187,16 @@ class RecordingRandom(_BaseInterceptor):
         return self._record("choice", [seq], self._rng.choice(seq))
 
     def shuffle(self, seq: list) -> None:
-        # In-place shuffle — record the resulting list so replay returns
-        # the same permutation.
+        # In-place shuffle. In REPLAY mode, we need to restore the
+        # recorded permutation, not call the live RNG.
+        if self.mode in (Mode.REPLAY, Mode.HYBRID):
+            recorded = self._record("shuffle", [], None)
+            if recorded is not None:
+                # Restore the recorded permutation in-place
+                seq.clear()
+                seq.extend(recorded)
+                return
+        # LIVE or RECORD: shuffle with live RNG, then record the result
         self._rng.shuffle(seq)
         self._record("shuffle", [], list(seq))
 
