@@ -8,6 +8,7 @@ non-deterministic input to an agent run:
     * :class:`RecordingClient`  — wraps an LLM client (OpenAI / Anthropic)
     * :class:`RecordingHTTP`    — wraps ``httpx.Client`` / ``requests``
     * :class:`RecordingTool`    — wraps a single tool callable
+    * :class:`RecordingStream`  — wraps streaming LLM responses
 
 Every interceptor follows the same contract: in RECORD mode it calls the
 real thing and writes the request/response to the cassette; in REPLAY
@@ -26,6 +27,12 @@ from agentreplay.interceptors.clock import (
 )
 from agentreplay.interceptors.http import RecordingHTTP, RecordingTool
 from agentreplay.interceptors.llm import RecordingClient
+from agentreplay.interceptors.streaming import (
+    RecordingStream,
+    ReplayStream,
+    is_streamed_response,
+    make_streamed_response,
+)
 
 __all__ = [
     "ClockInterceptor",
@@ -35,4 +42,8 @@ __all__ = [
     "RecordingClient",
     "RecordingHTTP",
     "RecordingTool",
+    "RecordingStream",
+    "ReplayStream",
+    "is_streamed_response",
+    "make_streamed_response",
 ]

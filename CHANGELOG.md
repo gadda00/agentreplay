@@ -8,42 +8,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- CrewAI framework adapter (`agentreplay.frameworks.crewai.wrap_crewai_llm`).
-  Patches the CrewAI `LLM.call` method in place so every model invocation
-  is captured.
-- AutoGen framework adapter — supports both v0.2 (`wrap_autogen_client`)
-  and v0.4+ (`wrap_autogen_v4_agent`).
-- Async LLM client support: `RecordingClient.acomplete()` coroutine.
-  Works with `AsyncOpenAI`, `AsyncAnthropic`, or any client with an
-  `acomplete` method. Falls back to running sync `complete` in a thread
-  if the wrapped client has no async path.
-- Real SWE-bench Verified task loader: `SwebenchVerifiedTaskSet.load()`
-  now downloads the dataset from HuggingFace and converts each task to
-  a `Task` object (requires `pip install datasets`).
-- Real GAIA task loader: `GaiaTaskSet.load()` — same pattern
-  (requires `pip install datasets` + accepting the GAIA license on HF).
-- New optional extras: `[crewai]`, `[autogen]`, `[datasets]`.
-- `pymdown-extensions` added to `[docs]` extra (mkdocs build was failing
-  without it).
-- 11 new tests: 8 for CrewAI/AutoGen adapters, 3 for async support.
-  Total: 105 tests, all passing.
+- **Streaming response support** (CRITICAL): `RecordingClient.complete()` and
+  `acomplete()` now handle `stream=True` (OpenAI/Anthropic). Chunks are
+  captured via `RecordingStream` and stored as a single event with
+  `{"chunks": [...], "streamed": True}`. On replay, a `ReplayStream`
+  yields the recorded chunks. Without this, agents using streaming
+  bypassed the recording layer entirely.
+- **Cassette export/import** (HIGH): `Cassette.export_zip()` and
+  `Cassette.import_zip()` for sharing cassettes as single ZIP archives.
+  CLI: `agentreplay export <cassette> <zip>` and `agentreplay import
+  <zip> <target>`.
+- **`agentreplay info` command**: shows installed version, Python version,
+  install path, optional dependency status, and available framework adapters.
+- **`agentreplay clean` command**: removes old/unwanted cassettes from a
+  corpus. Supports `--older-than 30d`, `--keep-outcome fail`, `--dry-run`
+  (default) / `--no-dry-run`.
+- **`--verbose` flag** on the CLI: enables debug logging for all
+  interceptors. Also configurable via `AGENTREPLAY_VERBOSE=1` or
+  `AGENTREPLAY_LOG_LEVEL=DEBUG` env vars.
+- **Logging module** (`agentreplay.logging`): centralised logger with
+  `get_logger()` and `set_verbose()`. All interceptors now log at DEBUG
+  level, silent by default.
+- **28 new tests**: streaming (10), export/import + CLI commands (11),
+  EventLog index (7). Total: 133 tests, all passing.
 
 ### Fixed
-- **Critical**: YAML syntax error in `.github/workflows/regression.yml` —
-  the step names `Overhead benchmark (§7.2 target: ≤5%)` and
-  `Reproduction-fidelity validation (§7.1 target: 100%)` contained
-  colons that broke the YAML parser, preventing ALL jobs in the workflow
-  from running. Renamed to `Overhead benchmark (target ≤5%)` and
-  `Reproduction-fidelity validation (target 100%)`.
-- **Critical**: `mkdocs build --strict` was failing in the docs workflow
-  because `pymdownx.admonition` was removed in pymdown-extensions v11.
-  Replaced with `pymdownx.details` and added `pymdown-extensions` to
-  the docs install step.
-- Broken docs links: `architecture.md` linked to `../README.md` (not
-  in docs tree), `contributing.md` linked to `docs/architecture.md`
-  (wrong path), `guides/recording.md` linked to a non-existent
-  `#risks-and-limitations` anchor. All fixed; the "Risks and limitations"
-  section was added to `architecture.md`.
+- **CRITICAL: EventLog O(n) lookup** — `by_call_id()` and `by_step()`
+  scanned the entire events.jsonl file on EVERY call. During replay, every
+  intercepted call did a full file scan. A 1000-event cassette = 500k line
+  reads. Now uses an in-memory index (lazily built, kept up-to-date on
+  append) for O(1) lookups. `replace_response()` now calls
+  `rebuild_index()` after rewriting the file.
+- **CRITICAL: Async `acomplete` race condition** — the `_call_counter` was
+  incremented at different points in the sync vs async paths, and in REPLAY
+  mode the async path delegated to sync which double-incremented. Now both
+  paths increment the counter exactly once at the top of the method.
+- **HIGH: HTTP interceptor exception handling** — exceptions from the real
+  client were not captured. Now they're recorded as the response payload
+  (with `error` field) and re-raised, so replay can reproduce connection
+  errors, timeouts, etc.
+- **MEDIUM: `_ReplayResponse` missing attributes** — added `.ok`,
+  `.is_success`, `.is_redirect`, `.is_client_error`, `.is_server_error`,
+  `.is_error`, `.url`, `.encoding`, `.elapsed`, `.reason`, `.cookies`,
+  `iter_bytes()`, `iter_content()`, `close()`, `__repr__()` for full
+  httpx/requests compatibility.
 
 ## [0.1.0] — 2026-07-12
 

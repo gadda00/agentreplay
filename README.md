@@ -199,7 +199,7 @@ The library is organised into five layers:
 | **`hashing`** | Canonicalizes inputs and computes call-site IDs (SHA-256 of `(step_id, canonicalized_input)`). The single most important property: the same logical call must produce the same call-site ID. |
 | **`storage`** | Three primitives: `BlobStore` (content-addressed, dedup'd), `EventLog` (append-only JSONL), `MetaIndex` (SQLite for cross-cassette queries). |
 | **`cassette`** | The `Cassette` class — owns the three storage primitives and exposes high-level operations (`write_event`, `lookup_call`, `resolve`, `fork`, `replace_response`). |
-| **`interceptors`** | `RecordingClient` (LLM), `RecordingTool`, `RecordingHTTP`, `RecordingClock`, `RecordingRandom`. Each one is a transparent wrapper that records or serves from the cassette depending on mode. |
+| **`interceptors`** | `RecordingClient` (LLM), `RecordingTool`, `RecordingHTTP`, `RecordingClock`, `RecordingRandom`, `RecordingStream`/`ReplayStream` (streaming). Each one is a transparent wrapper that records or serves from the cassette depending on mode. |
 | **`recorder` / `replayer` / `session`** | High-level orchestrators that own a cassette and expose a uniform `wrap_*` API. `Session` provides a single front-door over both. |
 
 On top of these:
@@ -331,6 +331,54 @@ async with Replayer.open("cassettes/run-001", mode=Mode.REPLAY) as rep:
 If the wrapped client has no `acomplete` method, `RecordingClient.acomplete`
 falls back to running the sync `complete` in a thread via
 `asyncio.to_thread`.
+
+### Streaming support
+
+AgentReplay captures streaming responses (`stream=True`) from OpenAI and
+Anthropic. Chunks are recorded as a single event with `{"chunks": [...],
+"streamed": True}` and replayed via a `ReplayStream` that yields them
+back one by one — zero model calls during replay.
+
+```python
+# Record a streaming call
+with Recorder.create("cassettes/run-001") as rec:
+    client = rec.wrap_openai(openai_client)
+    stream = client.complete(messages=[...], model="gpt-4o", stream=True)
+    for chunk in stream:
+        print(chunk.choices[0].delta.content, end="")
+
+# Replay (zero model calls — chunks served from cassette)
+with Replayer.open("cassettes/run-001", mode=Mode.REPLAY) as rep:
+    client = rep.wrap_openai(openai_client)
+    stream = client.complete(messages=[...], model="gpt-4o", stream=True)
+    for chunk in stream:
+        print(chunk.choices[0].delta.content, end="")
+```
+
+### Debug logging
+
+Enable debug logging to see what the interceptors are doing:
+
+```bash
+# Via CLI flag
+agentreplay --verbose replay cassettes/run-001
+
+# Via env var
+AGENTREPLAY_VERBOSE=1 python my_agent.py
+AGENTREPLAY_LOG_LEVEL=DEBUG python my_agent.py
+```
+
+### Cassette sharing (export/import)
+
+Share a cassette as a single ZIP archive for bug reports or collaboration:
+
+```bash
+# Export
+agentreplay export cassettes/run-001 run-001.zip
+
+# Import (on another machine)
+agentreplay import run-001.zip cassettes/run-001
+```
 
 ## Roadmap (12-week build, §6 of the proposal)
 

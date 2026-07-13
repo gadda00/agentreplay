@@ -20,6 +20,15 @@ from agentreplay.constants import CallType, Mode
 from agentreplay.cassette import Cassette
 from agentreplay.errors import DivergenceError
 from agentreplay.hashing import hash_call_site
+from agentreplay.interceptors.streaming import (
+    RecordingStream,
+    ReplayStream,
+    is_streamed_response,
+    make_streamed_response,
+)
+from agentreplay.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class RecordingClient:
@@ -100,14 +109,22 @@ class RecordingClient:
             thread_id=self.thread_id,
         )
 
+        is_stream = params.get("stream", False)
+        logger.debug("complete: sid=%s call_id=%s mode=%s stream=%s", sid, call_id[:8], self.mode, is_stream)
+
         # ----- REPLAY path -------------------------------------------------
         if self.mode in (Mode.REPLAY, Mode.HYBRID):
             event = self.cassette.lookup_call(call_id)
             if event is not None:
-                return self.cassette.resolve_response(event)
+                response = self.cassette.resolve_response(event)
+                # If the recorded response was streamed, wrap it in a
+                # ReplayStream so the agent code can iterate over chunks.
+                if is_stream and is_streamed_response(response):
+                    logger.debug("complete: replaying %d streamed chunks", len(response.get("chunks", [])))
+                    return ReplayStream(response["chunks"])
+                return response
             # No match — diverged.
             if self.mode == Mode.REPLAY:
-                # Raise so the Replayer can surface a structured diff.
                 raise DivergenceError(
                     step_id=sid,
                     call_type=CallType.LLM.value,
@@ -117,12 +134,41 @@ class RecordingClient:
                 )
             # HYBRID: fall through to live call.
             response = self._invoke_real(messages=messages, tools=tools, **params)
-            # Do NOT record the live response into this cassette — the
-            # cassette is the *reference* run; hybrid calls are exploratory.
             return response
 
         # ----- LIVE / RECORD path -----------------------------------------
         started = time.time()
+
+        if is_stream:
+            # Streaming: wrap the real stream in a RecordingStream that
+            # captures chunks as they're consumed, then write them to the
+            # cassette as a single event when the stream is exhausted.
+            real_stream = self._invoke_real(messages=messages, tools=tools, **params)
+
+            def _on_complete(chunks: list) -> None:
+                duration_ms = (time.time() - started) * 1000.0
+                if self.mode == Mode.RECORD:
+                    streamed_response = make_streamed_response(chunks)
+                    self.cassette.write_event(
+                        step_id=sid,
+                        call_type=CallType.LLM,
+                        call_id=call_id,
+                        request=request,
+                        response=streamed_response,
+                        started_at=started,
+                        duration_ms=duration_ms,
+                        metadata={
+                            "call_type": self.call_type,
+                            "model": params.get("model", ""),
+                            "streamed": True,
+                            "num_chunks": len(chunks),
+                        },
+                    )
+                    logger.debug("complete: recorded %d streamed chunks", len(chunks))
+
+            return RecordingStream(real_stream, on_complete=_on_complete)
+
+        # Non-streaming: call and record as before.
         response = self._invoke_real(messages=messages, tools=tools, **params)
         duration_ms = (time.time() - started) * 1000.0
 
@@ -137,6 +183,7 @@ class RecordingClient:
                 duration_ms=duration_ms,
                 metadata={"call_type": self.call_type, "model": params.get("model", "")},
             )
+            logger.debug("complete: recorded response (%.1fms)", duration_ms)
         return response
 
     # ------------------------------------------------------------------ #
@@ -175,53 +222,110 @@ class RecordingClient:
         ``AsyncAnthropic``, or a custom async client with an
         ``acomplete`` method), the call is awaited. Otherwise the
         sync ``complete`` is called in a thread via ``asyncio.to_thread``.
+
+        For streaming (``stream=True``), returns a :class:`RecordingStream`
+        (RECORD) or :class:`ReplayStream` (REPLAY) that can be iterated
+        asynchronously. The caller should use ``async for chunk in stream``.
         """
         import asyncio
         import inspect
 
-        # REPLAY path — same as sync, just return the recorded value.
         sid = step_id or f"{self._step_id_provider()}:{self._call_counter}"
-        # Note: we do NOT increment _call_counter here if we end up
-        # delegating to sync complete (which increments it). To keep
-        # call IDs stable, we let sync complete handle the counter.
-        if self.mode in (Mode.REPLAY, Mode.HYBRID):
-            return self.complete(messages=messages, tools=tools, step_id=step_id, **params)
+        self._call_counter += 1
 
-        # LIVE / RECORD path — try to invoke the real client's async path.
+        request: Dict[str, Any] = {"messages": messages, "tools": tools, **params}
+        call_id = hash_call_site(
+            sid,
+            request,
+            call_type=CallType.LLM.value,
+            agent_id=self.agent_id,
+            thread_id=self.thread_id,
+        )
+
+        is_stream = params.get("stream", False)
+        logger.debug("acomplete: sid=%s call_id=%s mode=%s stream=%s", sid, call_id[:8], self.mode, is_stream)
+
+        # ----- REPLAY path -------------------------------------------------
+        if self.mode in (Mode.REPLAY, Mode.HYBRID):
+            event = self.cassette.lookup_call(call_id)
+            if event is not None:
+                response = self.cassette.resolve_response(event)
+                if is_stream and is_streamed_response(response):
+                    return ReplayStream(response["chunks"])
+                return response
+            if self.mode == Mode.REPLAY:
+                raise DivergenceError(
+                    step_id=sid,
+                    call_type=CallType.LLM.value,
+                    expected_call_id=None,
+                    actual_call_id=call_id,
+                    actual_request=request,
+                )
+            # HYBRID fallthrough — call the real async client.
+            real_acomplete = getattr(self.real_client, "acomplete", None)
+            if real_acomplete is not None and inspect.iscoroutinefunction(real_acomplete):
+                return await real_acomplete(messages=messages, tools=tools, **params)
+            return await asyncio.to_thread(self._invoke_real, messages=messages, tools=tools, **params)
+
+        # ----- LIVE / RECORD path -----------------------------------------
+        started = time.time()
+
+        if is_stream:
+            # Streaming async — get the real async stream and wrap it.
+            real_acomplete = getattr(self.real_client, "acomplete", None)
+            if real_acomplete is not None and inspect.iscoroutinefunction(real_acomplete):
+                real_stream = await real_acomplete(messages=messages, tools=tools, **params)
+            else:
+                real_stream = await asyncio.to_thread(self._invoke_real, messages=messages, tools=tools, **params)
+
+            def _on_complete(chunks: list) -> None:
+                duration_ms = (time.time() - started) * 1000.0
+                if self.mode == Mode.RECORD:
+                    streamed_response = make_streamed_response(chunks)
+                    self.cassette.write_event(
+                        step_id=sid,
+                        call_type=CallType.LLM,
+                        call_id=call_id,
+                        request=request,
+                        response=streamed_response,
+                        started_at=started,
+                        duration_ms=duration_ms,
+                        metadata={
+                            "call_type": self.call_type,
+                            "model": params.get("model", ""),
+                            "streamed": True,
+                            "async": True,
+                            "num_chunks": len(chunks),
+                        },
+                    )
+
+            return RecordingStream(real_stream, on_complete=_on_complete)
+
+        # Non-streaming async.
         real_acomplete = getattr(self.real_client, "acomplete", None)
         if real_acomplete is not None and inspect.iscoroutinefunction(real_acomplete):
-            started = time.time()
             response = await real_acomplete(messages=messages, tools=tools, **params)
-            duration_ms = (time.time() - started) * 1000.0
         else:
-            # Fall back to sync in a thread.
-            response = await asyncio.to_thread(
-                self._invoke_real, messages=messages, tools=tools, **params
-            )
-            started = time.time()
-            duration_ms = (time.time() - started) * 1000.0
+            response = await asyncio.to_thread(self._invoke_real, messages=messages, tools=tools, **params)
+
+        duration_ms = (time.time() - started) * 1000.0
 
         if self.mode == Mode.RECORD:
-            sid_actual = step_id or f"{self._step_id_provider()}:{self._call_counter}"
-            self._call_counter += 1
-            request = {"messages": messages, "tools": tools, **params}
-            call_id = hash_call_site(
-                sid_actual,
-                request,
-                call_type=CallType.LLM.value,
-                agent_id=self.agent_id,
-                thread_id=self.thread_id,
-            )
             self.cassette.write_event(
-                step_id=sid_actual,
+                step_id=sid,
                 call_type=CallType.LLM,
                 call_id=call_id,
                 request=request,
                 response=response,
                 started_at=started,
                 duration_ms=duration_ms,
-                metadata={"call_type": self.call_type, "model": params.get("model", ""), "async": True},
+                metadata={
+                    "call_type": self.call_type,
+                    "model": params.get("model", ""),
+                    "async": True,
+                },
             )
+            logger.debug("acomplete: recorded response (%.1fms)", duration_ms)
         return response
 
     # ------------------------------------------------------------------ #

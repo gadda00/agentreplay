@@ -304,6 +304,9 @@ class Cassette:
             for e in all_events:
                 f.write(json.dumps(e.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
         os.replace(tmp, self.events.path)
+        # Force the EventLog to rebuild its in-memory index so subsequent
+        # lookups see the patched event.
+        self.events.rebuild_index()
         self.meta.num_events = len(all_events)
         self._write_meta()
         return patched
@@ -329,6 +332,65 @@ class Cassette:
             "num_events": len(self.events),
             "blobs": self.blobs.stats(),
         }
+
+    # ------------------------------------------------------------------ #
+    # Export / Import (ZIP for portability)
+    # ------------------------------------------------------------------ #
+    def export_zip(self, zip_path: Union[str, os.PathLike]) -> Path:
+        """Export this cassette as a ZIP archive for sharing.
+
+        The ZIP contains:
+            cassette.json
+            events.jsonl
+            blobs/<sha256[:2]>/<sha256>
+            blobs/...
+
+        Use :meth:`Cassette.import_zip` to reconstruct the cassette
+        from the archive.
+        """
+        import zipfile
+
+        zip_path = Path(zip_path)
+        zip_path.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            # Metadata
+            zf.write(self.root / self.META_FILE, self.META_FILE)
+            # Events
+            events_path = self.root / EventLog.FILENAME
+            if events_path.exists():
+                zf.write(events_path, EventLog.FILENAME)
+            # Blobs
+            blobs_dir = self.root / BlobStore.BLOB_DIR
+            if blobs_dir.exists():
+                for path in blobs_dir.rglob("*"):
+                    if path.is_file():
+                        arcname = str(path.relative_to(self.root))
+                        zf.write(path, arcname)
+        return zip_path
+
+    @classmethod
+    def import_zip(
+        cls,
+        zip_path: Union[str, os.PathLike],
+        target_root: Union[str, os.PathLike],
+        *,
+        readonly: bool = True,
+    ) -> "Cassette":
+        """Import a cassette from a ZIP archive created by :meth:`export_zip`.
+
+        Extracts the archive to ``target_root`` and opens the resulting
+        cassette directory.
+        """
+        import zipfile
+
+        zip_path = Path(zip_path)
+        target_root = Path(target_root)
+        if target_root.exists() and any(target_root.iterdir()):
+            raise CassetteError(f"target root {target_root!s} is not empty")
+        target_root.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(target_root)
+        return cls.open(target_root, readonly=readonly)
 
     # ------------------------------------------------------------------ #
     # Convenience

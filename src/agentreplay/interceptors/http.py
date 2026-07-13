@@ -180,21 +180,51 @@ class RecordingHTTP(_BaseCallInterceptor):
             # HYBRID fallthrough:
 
         started = time.time()
-        if self.dialect == "httpx":
-            raw = self.real_client.request(method, url, **kwargs)
+        try:
+            if self.dialect == "httpx":
+                raw = self.real_client.request(method, url, **kwargs)
+                response = {
+                    "status": raw.status_code,
+                    "headers": dict(raw.headers),
+                    "body": raw.text,
+                    "url": str(raw.url) if hasattr(raw, "url") else url,
+                    "encoding": getattr(raw, "encoding", "utf-8") or "utf-8",
+                    "elapsed": getattr(raw, "elapsed", 0.0),
+                }
+            else:  # requests
+                raw = self.real_client.request(method, url, **kwargs)
+                response = {
+                    "status": raw.status_code,
+                    "headers": dict(raw.headers),
+                    "body": raw.text,
+                    "url": str(raw.url) if hasattr(raw, "url") else url,
+                    "encoding": getattr(raw, "encoding", "utf-8") or "utf-8",
+                    "elapsed": getattr(raw, "elapsed", 0.0),
+                    "reason": getattr(raw, "reason", ""),
+                }
+            duration_ms = (time.time() - started) * 1000.0
+        except Exception as exc:
+            # Record the exception as the response so replay can reproduce it.
+            duration_ms = (time.time() - started) * 1000.0
             response = {
-                "status": raw.status_code,
-                "headers": dict(raw.headers),
-                "body": raw.text,
+                "status": 0,
+                "headers": {},
+                "body": "",
+                "error": f"{type(exc).__name__}: {exc}",
             }
-        else:  # requests
-            raw = self.real_client.request(method, url, **kwargs)
-            response = {
-                "status": raw.status_code,
-                "headers": dict(raw.headers),
-                "body": raw.text,
-            }
-        duration_ms = (time.time() - started) * 1000.0
+            if self.mode == Mode.RECORD:
+                self.cassette.write_event(
+                    step_id=sid,
+                    call_type=CallType.HTTP,
+                    call_id=call_id,
+                    request=request,
+                    response=response,
+                    started_at=started,
+                    duration_ms=duration_ms,
+                    metadata={"dialect": self.dialect, "raised": True, "error": str(exc)},
+                )
+            raise
+
         if self.mode == Mode.RECORD:
             self.cassette.write_event(
                 step_id=sid,
@@ -227,25 +257,113 @@ class RecordingHTTP(_BaseCallInterceptor):
 
 class _ReplayResponse:
     """Mimics enough of an ``httpx.Response`` / ``requests.Response``
-    for the wrapped client's caller to keep working in REPLAY mode."""
+    for the wrapped client's caller to keep working in REPLAY mode.
+
+    Implements the common subset of attributes/methods from both
+    httpx.Response and requests.Response so agent code that uses either
+    library's API surface works transparently during replay.
+    """
 
     def __init__(self, cached: Dict[str, Any]) -> None:
-        self.status_code = cached.get("status", 200)
-        self.headers = cached.get("headers", {})
-        self.text = cached.get("body", "")
-        self._json = None
+        self.status_code: int = cached.get("status", 200)
+        self.headers: Dict[str, str] = dict(cached.get("headers", {}))
+        self.text: str = cached.get("body", "") or ""
+        self._json: Any = None
+        self._content: Optional[bytes] = None
+        # httpx/requests compatibility attrs
+        self.url: str = cached.get("url", "")
+        self.encoding: str = cached.get("encoding", "utf-8")
+        self.elapsed: float = cached.get("elapsed", 0.0)
+        self.reason: str = cached.get("reason", "")
+
+    # --- Content accessors ---
 
     @property
     def content(self) -> bytes:
-        return self.text.encode("utf-8")
+        """Raw response body as bytes (httpx + requests compatible)."""
+        if self._content is None:
+            self._content = self.text.encode("utf-8") if self.text else b""
+        return self._content
 
-    def json(self) -> Any:
+    def json(self, **kwargs: Any) -> Any:
+        """Parse the response body as JSON (httpx + requests compatible)."""
         import json as _json
 
         if self._json is None:
-            self._json = _json.loads(self.text or "null")
+            try:
+                self._json = _json.loads(self.text or "null")
+            except _json.JSONDecodeError:
+                self._json = None
         return self._json
 
+    # --- Status helpers (httpx + requests compatible) ---
+
+    @property
+    def ok(self) -> bool:
+        """True if status code is < 400 (requests) / is_success (httpx)."""
+        return self.status_code < 400
+
+    @property
+    def is_success(self) -> bool:
+        """httpx: True if 200 <= status < 300."""
+        return 200 <= self.status_code < 300
+
+    @property
+    def is_redirect(self) -> bool:
+        """httpx: True if 300 <= status < 400."""
+        return 300 <= self.status_code < 400
+
+    @property
+    def is_client_error(self) -> bool:
+        """httpx: True if 400 <= status < 500."""
+        return 400 <= self.status_code < 500
+
+    @property
+    def is_server_error(self) -> bool:
+        """httpx: True if status >= 500."""
+        return self.status_code >= 500
+
+    @property
+    def is_error(self) -> bool:
+        """httpx: True if status >= 400."""
+        return self.status_code >= 400
+
     def raise_for_status(self) -> None:
+        """Raise an exception if status >= 400 (httpx + requests compatible)."""
         if self.status_code >= 400:
-            raise RuntimeError(f"replayed HTTP {self.status_code}")
+            raise RuntimeError(f"replayed HTTP {self.status_code}: {self.reason or 'Error'}")
+
+    # --- Cookies (basic compatibility) ---
+
+    @property
+    def cookies(self) -> Dict[str, str]:
+        """Parse Set-Cookie headers into a simple dict. Not a full CookieJar."""
+        result: Dict[str, str] = {}
+        for key, value in self.headers.items():
+            if key.lower() == "set-cookie":
+                # Very basic parsing — doesn't handle all cookie attributes
+                for cookie in value.split(";"):
+                    if "=" in cookie:
+                        name, _, val = cookie.strip().partition("=")
+                        result[name] = val
+        return result
+
+    # --- Iteration (for streaming responses, though we replay as complete) ---
+
+    def iter_bytes(self, chunk_size: int = 1024) -> Any:
+        """httpx: iterate over bytes in chunks."""
+        yield self.content
+
+    def iter_content(self, chunk_size: int = 1024, decode_unicode: bool = False) -> Any:
+        """requests: iterate over content in chunks."""
+        if decode_unicode:
+            yield self.text
+        else:
+            yield self.content
+
+    def close(self) -> None:
+        """No-op — compatibility with httpx/requests stream close()."""
+        pass
+
+    def __repr__(self) -> str:
+        return f"<_ReplayResponse [{self.status_code}]>"
