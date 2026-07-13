@@ -171,6 +171,9 @@ class Replayer:
     def __exit__(self, *exc: Any) -> None:
         pass
 
+    def __repr__(self) -> str:
+        return f"<Replayer cassette={self.cassette.meta.id!r} mode={self.mode!r} events={len(self.cassette.events)}>"
+
 
 class _ReplayStepProvider:
     """Default step-ID provider for replay — mirrors the recorder's

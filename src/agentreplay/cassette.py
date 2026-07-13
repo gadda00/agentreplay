@@ -314,9 +314,9 @@ class Cassette:
     # ------------------------------------------------------------------ #
     # Diff
     # ------------------------------------------------------------------ #
-    def diff_against(self, other: "Cassette") -> Dict[str, Any]:
+    def diff_against(self, other: "Cassette") -> "Diff":
         """High-level structural comparison between two cassettes."""
-        from agentreplay.diff import diff_structural
+        from agentreplay.diff import Diff, diff_structural
 
         return diff_structural(self, other)
 

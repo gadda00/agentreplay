@@ -29,8 +29,11 @@ def __getattr__(name: str):  # pragma: no cover - lazy module loader
         from agentreplay.frameworks.anthropic_sdk import wrap_anthropic
         return wrap_anthropic
     if name == "wrap_langgraph":
-        from agentreplay.frameworks.langgraph import wrap_langgraph
-        return wrap_langgraph
+        # The langgraph module exports wrap_llm, wrap_tools, bind_graph,
+        # and wrap_node — NOT wrap_langgraph. Return the module itself
+        # so users can access all of them.
+        from agentreplay.frameworks import langgraph
+        return langgraph
     if name == "wrap_crewai_llm":
         from agentreplay.frameworks.crewai import wrap_crewai_llm
         return wrap_crewai_llm

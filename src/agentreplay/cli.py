@@ -557,6 +557,54 @@ def clean(corpus_root: str, older_than: Optional[str], keep_outcome: Optional[st
 
 
 # ---------------------------------------------------------------------- #
+# doctor
+# ---------------------------------------------------------------------- #
+@cli.command()
+@click.argument("cassette", type=click.Path(exists=True, file_okay=False))
+def doctor(cassette: str) -> None:
+    """Validate cassette health — check for missing blobs, corrupted events, etc.
+
+    Exits 0 if the cassette is healthy, 1 if issues are found.
+    """
+    c = Cassette.open(cassette, readonly=True)
+    issues: list[str] = []
+
+    # Check 1: every event's request_hash and response_hash must exist in the blob store
+    for ev in c.events:
+        if not c.blobs.has(ev.request_hash):
+            issues.append(f"event seq={ev.seq}: missing request blob {ev.request_hash}")
+        if not c.blobs.has(ev.response_hash):
+            issues.append(f"event seq={ev.seq}: missing response blob {ev.response_hash}")
+
+    # Check 2: metadata num_events should match actual event count
+    actual_events = len(c.events)
+    if c.meta.num_events != actual_events:
+        issues.append(f"metadata num_events={c.meta.num_events} but actual={actual_events}")
+
+    # Check 3: seq numbers should be contiguous starting from 0
+    seqs = [e.seq for e in c.events]
+    expected = list(range(len(seqs)))
+    if seqs != expected:
+        issues.append(f"seq numbers are not contiguous: {seqs[:10]}...")
+
+    # Check 4: cassette.json should be valid JSON (already verified by Cassette.open)
+    # Check 5: events.jsonl should be valid JSONL (already verified by EventLog iteration)
+
+    if issues:
+        click.echo(f"✗ {len(issues)} issue(s) found in cassette {c.meta.id}:")
+        for issue in issues:
+            click.echo(f"  · {issue}")
+        sys.exit(1)
+    else:
+        click.echo(f"✓ cassette {c.meta.id} is healthy")
+        click.echo(f"  events: {actual_events}")
+        click.echo(f"  blobs: {c.blobs.stats()['blobs']} ({c.blobs.stats()['bytes']} bytes)")
+        click.echo(f"  framework: {c.meta.framework}")
+        click.echo(f"  outcome: {c.meta.outcome}")
+        sys.exit(0)
+
+
+# ---------------------------------------------------------------------- #
 # Helpers
 # ---------------------------------------------------------------------- #
 def _import_dotted(path: str) -> Any:

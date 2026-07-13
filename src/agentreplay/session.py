@@ -111,13 +111,19 @@ class Session:
     # ------------------------------------------------------------------ #
     def __enter__(self) -> "Session":
         if isinstance(self.inner, Recorder):
-            # already a context manager
+            self.inner.__enter__()
+        elif hasattr(self.inner, "__enter__"):
             self.inner.__enter__()
         return self
 
     def __exit__(self, *exc: Any) -> None:
         if isinstance(self.inner, Recorder):
             self.inner.__exit__(*exc)
+        elif hasattr(self.inner, "__exit__"):
+            self.inner.__exit__(*exc)
+
+    def __repr__(self) -> str:
+        return f"<Session mode={self.mode!r} cassette={self.cassette!r}>"
 
 
 class _LiveSession:

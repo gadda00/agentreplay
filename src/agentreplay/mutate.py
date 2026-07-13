@@ -166,8 +166,6 @@ def apply_patch_set(
                 raise MutationError(f"patch {p!r} does not resolve to a unique event")
             seq = ev.seq
         resolved.append((int(seq), p["new_response"]))
-    for seq, _ in resolved:
-        pass  # validation only
     for seq, new_response in sorted(resolved, key=lambda x: x[0]):
         forked.replace_response(seq, new_response)
     forked.meta.tags = list(set(forked.meta.tags + ["patched"]))

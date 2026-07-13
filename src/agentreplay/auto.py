@@ -38,4 +38,6 @@ def init() -> Optional[Session]:
         )
     if mode in (Mode.REPLAY.value, Mode.HYBRID.value):
         return Session.replay(cassette, mode=Mode(mode))
+    if mode == Mode.LIVE.value:
+        return Session.live()
     return None

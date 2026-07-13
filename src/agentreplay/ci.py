@@ -81,9 +81,18 @@ class RegressionReport:
             lines.append(f"  {mark} {r.cassette_id} ({r.duration_ms:.1f} ms)")
             if not r.passed:
                 if r.error:
-                    lines.append(f"      error: {r.error}")
+                    # Truncate long error messages for readability
+                    err = r.error
+                    if len(err) > 200:
+                        err = err[:197] + "..."
+                    lines.append(f"      error: {err}")
                 if r.diff:
-                    lines.append(f"      summary: {r.diff}")
+                    # Show structured divergence details
+                    d = r.diff
+                    lines.append(f"      step_id: {d.get('step_id', '?')}")
+                    lines.append(f"      call_type: {d.get('call_type', '?')}")
+                    lines.append(f"      recorded_call_id: {d.get('recorded_call_id', 'N/A')}")
+                    lines.append(f"      actual_call_id: {d.get('actual_call_id', 'N/A')}")
         return "\n".join(lines)
 
 

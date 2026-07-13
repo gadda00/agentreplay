@@ -20,7 +20,6 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 from agentreplay.cassette import Cassette
 from agentreplay.constants import Mode
-from agentreplay.errors import ConfigurationError
 from agentreplay.interceptors import (
     RecordingClient,
     RecordingClock,
@@ -208,6 +207,9 @@ class Recorder:
         else:
             outcome = existing
         self.close(outcome=outcome)
+
+    def __repr__(self) -> str:
+        return f"<Recorder cassette={self.cassette.meta.id!r} events={len(self.cassette.events)}>"
 
 
 # ---------------------------------------------------------------------- #

@@ -67,11 +67,17 @@ def canonicalize(value: Any) -> Any:
 
     - Dicts are sorted by key; non-deterministic keys are dropped.
     - Strings have UUIDs and ISO-8601 timestamps redacted.
+    - Bytes are decoded as UTF-8 (fallback to hex) so they hash stably.
     - Lists and tuples are canonicalized element-wise.
     - Everything else is returned as-is.
     """
     if value is None or isinstance(value, (bool, int, float)):
         return value
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except (UnicodeDecodeError, AttributeError):
+            return value.hex()
     if isinstance(value, str):
         return _redact_string(value)
     if isinstance(value, (list, tuple)):
