@@ -45,16 +45,30 @@ class BlobStore:
     # Write
     # ------------------------------------------------------------------ #
     def put(self, value: Any) -> str:
-        """Store ``value`` and return its SHA-256 hex digest."""
-        payload = canonical_json(value).encode("utf-8")
-        digest = hashlib.sha256(payload).hexdigest()
+        """Store ``value`` and return its SHA-256 hex digest.
+
+        The digest is computed from the *canonicalized* form (for
+        deduplication), but the *original* value is stored verbatim
+        (preserving all fields including 'id', 'created', etc.).
+        This ensures replay returns the exact original response.
+        """
+        # Compute digest from canonical form (for dedup)
+        canonical = canonical_json(value)
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         path = self._path_for(digest)
         if not path.exists():
             with self._lock:
                 if not path.exists():  # double-check under lock
                     path.parent.mkdir(parents=True, exist_ok=True)
+                    # Store the ORIGINAL value (not canonicalized) so
+                    # replay returns the exact response the agent received.
+                    # We use sort_keys=True for stable output but do NOT
+                    # strip non-deterministic keys.
+                    import json as _json
+                    raw = _json.dumps(value, sort_keys=True, ensure_ascii=False,
+                                      separators=(",", ":")).encode("utf-8")
                     tmp = path.with_suffix(".tmp")
-                    tmp.write_bytes(payload)
+                    tmp.write_bytes(raw)
                     os.replace(tmp, path)
         return digest
 
@@ -62,7 +76,7 @@ class BlobStore:
     # Read
     # ------------------------------------------------------------------ #
     def get(self, digest: str) -> Any:
-        """Return the canonical payload stored at ``digest``.
+        """Return the original payload stored at ``digest``.
 
         Raises ``KeyError`` if the blob is missing.
         """
